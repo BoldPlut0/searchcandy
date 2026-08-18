@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "searchcandy"
+version = "0.1.0"
+description = "Grounded answers from your documents — or an honest 'not in your data.' Never an invention."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["httpx>=0.25"]
+
+[project.urls]
+Homepage = "https://searchcandy-labs.com"
+Documentation = "https://docs.searchcandy-labs.com"
+
+[tool.setuptools.packages.find]
+include = ["searchcandy*"]
