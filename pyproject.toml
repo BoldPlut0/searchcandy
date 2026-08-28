@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "searchcandy"
-version = "0.1.0"
+version = "0.3.0"
 license = {text = "MIT"}
 description = "Grounded answers from your documents — or an honest 'not in your data.' Never an invention."
 readme = "README.md"
