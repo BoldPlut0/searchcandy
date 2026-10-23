@@ -164,7 +164,7 @@ class DraftBehind(SearchCandyError):
         if self.versions_since_fork:
             numbers = ", ".join(f"v{v.number}"
                                 for v in self.versions_since_fork)
-            message = (f"{message} — {len(self.versions_since_fork)} "
+            message = (f"{message}: {len(self.versions_since_fork)} "
                        f"version(s) would not be current after publish: "
                        f"{numbers}. Pass accept_behind=True to publish "
                        f"anyway.")

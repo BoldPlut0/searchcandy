@@ -1,7 +1,8 @@
-"""Typed responses — the wire schema, made pleasant.
+"""Typed responses: the wire schema, made pleasant.
 
-`not_covered` is a first-class FIELD, never an exception: an honest "not
-in your data" is a correct answer, and the type system says so.
+`not_covered` is a first-class FIELD, never an exception: it says no
+supporting passage was returned, and your code decides what happens
+next.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional
 
 @dataclass(frozen=True)
 class ContextAtom:
-    """One served evidence span — byte-faithful to your document."""
+    """One served passage, word for word from your document."""
     text: str
     source_id: str
     node_id: str
@@ -67,7 +68,8 @@ class Telemetry:
 @dataclass(frozen=True)
 class RetrievalResponse:
     query: str
-    #: True = the honest "not in your data": zero tokens, no invention
+    #: True = no supporting passage was returned. Not proof that none
+    #: exists: the flag can be wrong both ways, so read the passages
     not_covered: bool
     context_atoms: List[ContextAtom]
     verbatim_quotes: List[ContextAtom]
@@ -109,10 +111,9 @@ class RetrievalResponse:
     @property
     def refused(self) -> bool:
         """DEPRECATED alias for `not_covered`, kept so code written
-        against 0.1.0 keeps running. "Refused" made the product's
-        defining behaviour read like a malfunction; the honest name is
-        `not_covered` — the answer was not in your documents, so
-        nothing was invented. Removed at the next major."""
+        against 0.1.0 keeps running. `not_covered` names what happened:
+        no supporting passage was returned. Removed at the next
+        major."""
         return self.not_covered
 
     @property

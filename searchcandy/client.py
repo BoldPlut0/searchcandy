@@ -1,5 +1,5 @@
-"""The SearchCandy client — ten lines to a grounded answer and an
-honest refusal.
+"""The SearchCandy client: a few lines from your files to the exact
+passages that answer a question, each with its file and version.
 
 Retry law (customer-path design §3, verbatim):
 - reads (query/status) retry on network failure with backoff;
@@ -41,6 +41,12 @@ from .versions import Versions
 
 DEFAULT_BASE_URL = "https://api.searchcandy-labs.com"
 ENV_KEY = "SEARCHCANDY_API_KEY"
+#: sent as the User-Agent; kept equal to __version__ by the tests
+SDK_VERSION = "0.3.1"
+#: seconds to open a connection, separate from `timeout` (which bounds
+#: a slow answer): an unreachable API used to cost 75 s per attempt,
+#: about four minutes before a query gave up
+CONNECT_TIMEOUT = 10.0
 
 MAX_DOCS_PER_BATCH = 500
 #: the API's own ceiling for one remove() call (§3 caps)
@@ -73,9 +79,12 @@ class SearchCandy:
                 "no API key: pass api_key=... or set the "
                 f"{ENV_KEY} environment variable")
         self._http = httpx.Client(
-            base_url=base_url, timeout=timeout, transport=transport,
+            base_url=base_url,
+            timeout=httpx.Timeout(timeout,
+                                  connect=min(timeout, CONNECT_TIMEOUT)),
+            transport=transport,
             headers={"Authorization": f"Bearer {key}",
-                     "User-Agent": "searchcandy-python/0.3.0"})
+                     "User-Agent": f"searchcandy-python/{SDK_VERSION}"})
         #: bring-your-own embedding servers (see embedding_servers.py);
         #: the vault hop is the ONE place a provider key travels
         self.embedding_servers = EmbeddingServers(
@@ -100,10 +109,12 @@ class SearchCandy:
     def query(self, query: str, store: Optional[str] = None,
               version: Optional[int] = None,
               draft: Optional[str] = None) -> RetrievalResponse:
-        """Ask. Returns a grounded answer (byte-faithful quotes) or an
-        honest refusal (`not_covered=True`, zero tokens) — a refusal is
-        a RESULT, not an exception. `store` accepts a graph NAME as
-        well as an id ("contracts" reads better than "st_9f…").
+        """Ask. Returns the passages that answer, word for word from
+        your documents (`r.quotes`, each with its `source_id`), and the
+        version that answered. `not_covered=True` means no supporting
+        passage was returned: a field, not an exception, and not proof
+        that none exists. `store` accepts a graph NAME as well as an id
+        ("contracts" reads better than "st_9f…").
 
         By default you get the graph's CURRENT answer. Pin the past
         with `version=n`, or ask an unpublished line with
@@ -117,14 +128,14 @@ class SearchCandy:
         Every answer says which version produced it, so
         `query(q, version=r.version)` is the receipt: within one store
         generation it reproduces `r`. A pinned answer is served from
-        exactly that version's document set, through the same
-        certified pipeline — and its refusal reads "not in your
-        documents at v3", not "not in your documents"."""
+        exactly that version's document set. To ask about a date, find
+        the version that was answering then:
+        `query(q, version=sc.versions.as_of("2026-08-19T10:00:00Z").number)`."""
         if version is not None and draft is not None:
             raise RequestError(
-                "version and draft: pass one or the other — a version "
+                "version and draft: pass one or the other. A version "
                 "number names a sealed point on the graph's own "
-                "timeline, a draft names an unpublished line")
+                "timeline; a draft names an unpublished line")
         store = self._resolve_store(store)
         path = (f"/v1/stores/{store}/query" if store else "/v1/query")
         payload: dict = {"query": query}
@@ -176,7 +187,7 @@ class SearchCandy:
                         remaining=len(documents) - done_docs)
                 if job.status == "paused_budget":
                     raise BudgetPausedError(
-                        "daily embedding budget reached — batch is "
+                        "daily embedding budget reached: the batch is "
                         "paused; retry after the cap resets or "
                         "contact us")
                 total_tokens += job.embed_tokens or 0
@@ -217,14 +228,15 @@ class SearchCandy:
             seen_real.add(real)
             if path.suffix.lower() not in (".txt", ".md"):
                 skipped.append(f"{path}: unsupported type "
-                               f"({path.suffix or 'no extension'}) — "
-                               f"v1 ingests .txt/.md; we convert other "
-                               f"formats during onboarding")
+                               f"({path.suffix or 'no extension'}); "
+                               f"TGM takes .txt and .md files, and we "
+                               f"convert other formats with you during "
+                               f"onboarding")
                 continue
             try:
                 content = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
-                skipped.append(f"{path}: not valid UTF-8 — skipped "
+                skipped.append(f"{path}: not valid UTF-8, skipped "
                                f"rather than silently mangled")
                 continue
             if not content.strip():
@@ -232,7 +244,7 @@ class SearchCandy:
                 continue
             if len(content.encode()) > LARGE_FILE_NOTE_BYTES:
                 skipped.append(f"{path}: NOTE ingested but large "
-                               f"(> 2MB) — check it isn't an export "
+                               f"(> 2MB); check it isn't an export "
                                f"artifact")
             docs.append({"content": content,
                          "source_id": str(path.relative_to(root))})
@@ -276,7 +288,7 @@ class SearchCandy:
         if len(requested) > MAX_REMOVE_SOURCE_IDS:
             raise RequestError(
                 f"source_ids: {len(requested)} given, at most "
-                f"{MAX_REMOVE_SOURCE_IDS} per call — split it into "
+                f"{MAX_REMOVE_SOURCE_IDS} per call; split it into "
                 f"calls (each seals its own version)")
         store_id = self._resolve_store(store) or self._default_store_id()
         payload: dict = {"source_ids": requested,
@@ -370,7 +382,7 @@ class SearchCandy:
         sid = cache.get(store)
         if sid is None:
             raise StoreAccessError(
-                f"no graph named {store!r} on this account — "
+                f"no graph named {store!r} on this account; "
                 f"client.graphs() lists what exists")
         return sid
 
@@ -406,9 +418,9 @@ class SearchCandy:
         sid = me.get("default_store_id")
         if not sid:
             raise RequestError(
-                "this key has no default store bound — pass store=... "
-                "(your store id is in the portal), or ask us to bind "
-                "a default")
+                "this key has no default graph bound: pass store=... "
+                "(a graph name or id; client.graphs() lists them), "
+                "or ask us to bind a default")
         self._default_store_cache = sid
         return sid
 
@@ -442,7 +454,7 @@ class SearchCandy:
             except GraphNotReadyError as exc:
                 if time.monotonic() > deadline:
                     raise SearchCandyError(
-                        "store stayed busy past the poll timeout — a "
+                        "store stayed busy past the poll timeout: a "
                         "long write is running; retry later or raise "
                         "poll_timeout") from None
                 time.sleep(exc.retry_after_s or 5.0)
@@ -458,7 +470,7 @@ class SearchCandy:
             delay = min(delay * 1.5, 30.0)
         raise SearchCandyError(
             f"job {job.job_id} still {job.status} after "
-            f"{poll_timeout:.0f}s — it may complete; check "
+            f"{poll_timeout:.0f}s; it may still complete: check "
             f"client.job('{job.job_id}') or contact support")
 
     def _request(self, method: str, path: str, *, json=None, params=None,
@@ -474,8 +486,10 @@ class SearchCandy:
                     time.sleep(min(2.0 ** attempt, 8.0))
                     continue
                 raise SearchCandyUnavailable(
-                    f"could not reach the API after {attempt + 1} "
-                    f"attempts: {type(exc).__name__}") from None
+                    f"could not reach {self._http.base_url} after "
+                    f"{attempt + 1} attempt(s): {type(exc).__name__}. "
+                    f"If this keeps happening, email "
+                    f"hello@searchcandy-labs.com") from None
             if resp.status_code in expected:
                 return resp.json()
             if resp.status_code in _RETRYABLE_STATUS and attempt < retries:
@@ -574,12 +588,12 @@ def _refuse_repeated_source_ids(documents: Sequence[dict]) -> None:
         sid = d.get("source_id")
         if sid is None:
             raise RequestError(
-                f"documents[{i}]: source_id is required — it is the "
+                f"documents[{i}]: source_id is required; it is the "
                 f"identity we update a document by")
         if sid in seen:
             raise RequestError(
                 f"duplicate source_id {sid!r}: documents[{seen[sid]}] "
-                f"and documents[{i}] share it — an existing source_id "
+                f"and documents[{i}] share it. An existing source_id "
                 f"UPDATES the document, so only one body would "
                 f"survive. Split one large document into parts with "
                 f"DISTINCT source_ids; give a genuine revision the "
@@ -598,11 +612,11 @@ def _batches(documents: Sequence[dict]) -> Iterable[List[dict]]:
         if w > MAX_BATCH_BYTES:
             raise RequestError(
                 f"document {d.get('source_id', '?')!r} is "
-                f"{w // (1024 * 1024)}MB — over the "
+                f"{w // (1024 * 1024)}MB, over the "
                 f"{MAX_BATCH_BYTES // (1024 * 1024)}MB per-request "
-                f"limit; split it into parts with DISTINCT source_ids "
-                f"— parts sharing one source_id would replace each "
-                f"other, leaving only the last part in the graph — or "
+                f"limit. Split it into parts with DISTINCT source_ids "
+                f"(parts sharing one source_id would replace each "
+                f"other, leaving only the last part in the graph), or "
                 f"send it to us to convert")
         if batch and (len(batch) >= MAX_DOCS_PER_BATCH
                       or weight + w > MAX_BATCH_BYTES):

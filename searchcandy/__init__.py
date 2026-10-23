@@ -1,7 +1,8 @@
-"""searchcandy — grounded answers from your documents, or an honest
-"not in your data." Never an invention.
+"""searchcandy: the Python client for TGM by SearchCandy Labs. TGM
+hands your AI the exact passages from your own text and Markdown
+files, each with its file and version.
 
-0.3.0 adds VERSIONS and DRAFTS: every sealed change to a graph is a
+VERSIONS and DRAFTS (0.3.0): every sealed change to a graph is a
 numbered, immutable snapshot you can ask questions of forever, restore
 in one instant call, or prepare in a draft before it ships.
 """
@@ -23,7 +24,7 @@ from .types import (ContextAtom, GraphSummary, IngestReport, JobInfo,
 from .versions import (DocumentChange, Version, VersionChanges,
                        VersionDocument, VersionPage)
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __all__ = [
     "SearchCandy", "RetrievalResponse", "ContextAtom", "Telemetry",
     "GraphSummary", "GraphNotReadyError",

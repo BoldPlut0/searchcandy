@@ -21,7 +21,8 @@ the only place the key travels:
    with the hosted API. No secret is in this request. The API answers
    with the server id and the derived secret name.
 2. The key is vaulted through SearchCandy's console vault route
-   (`vault_url`, default console.searchcandy-labs.com) as ONE Secret
+   (`vault_url`, default searchcandy-labs.com/api/embedding-servers/
+   vault; `SEARCHCANDY_VAULT_URL` overrides it) as ONE Secret
    Manager version under that derived name. The hosted API never
    accepts a secret in a body; the vault route is authenticated with
    the same API key. The plaintext is sent once, over TLS, and never
@@ -47,7 +48,9 @@ from .errors import (AuthError, CredentialVaultError, RequestError,
 if TYPE_CHECKING:  # pragma: no cover
     from .client import SearchCandy
 
-DEFAULT_VAULT_URL = "https://console.searchcandy-labs.com/api/embedding-servers/vault"
+#: the console is served from the main site (0.3.0 named a
+#: console.searchcandy-labs.com host that never existed)
+DEFAULT_VAULT_URL = "https://searchcandy-labs.com/api/embedding-servers/vault"
 ENV_VAULT_URL = "SEARCHCANDY_VAULT_URL"
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ class EmbeddingServers:
             if s.id == id_or_name or s.name == id_or_name:
                 return s
         raise StoreAccessError(
-            f"no embedding server {id_or_name!r} on this account — "
+            f"no embedding server {id_or_name!r} on this account; "
             f"client.embedding_servers() lists what exists")
 
     # ---- write -------------------------------------------------------------
@@ -201,8 +204,8 @@ class EmbeddingServers:
         except httpx.HTTPError as exc:
             raise CredentialVaultError(
                 f"could not reach the credential vault ({type(exc).__name__})"
-                f" — server {server_id} is registered but has no "
-                f"credential yet; vault it from the portal or retry",
+                f"; server {server_id} is registered but has no "
+                f"credential yet: vault it from the portal or retry",
                 server_id=server_id) from None
         if resp.status_code == 401:
             raise AuthError("the vault refused this API key", None)
@@ -212,7 +215,7 @@ class EmbeddingServers:
                 None)
         if resp.status_code >= 400:
             raise CredentialVaultError(
-                f"the credential vault answered {resp.status_code} — "
+                f"the credential vault answered {resp.status_code}; "
                 f"server {server_id} is registered but has no credential "
                 f"yet; retry, or vault it from the portal",
                 server_id=server_id)

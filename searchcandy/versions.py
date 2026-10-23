@@ -203,7 +203,7 @@ class VersionPage(Sequence):
 
     def __repr__(self) -> str:
         if self.head is None:
-            return ("<VersionPage 0 versions — this graph predates "
+            return ("<VersionPage 0 versions: this graph predates "
                     "versioning>")
         return f"<VersionPage {len(self)} of {self.head:,} versions>"
 

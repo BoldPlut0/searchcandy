@@ -1,43 +1,84 @@
 # searchcandy
 
-Grounded answers from your documents — or an honest "not in your
-data." Never an invention. Proven.
+The Python client for **TGM** by SearchCandy Labs. TGM hands your AI the
+exact passages from your own text and Markdown files, each with its file
+and version. Nothing to chunk or tune, and every version is kept, so you
+can ask about any past date.
 
-```python
-# export SEARCHCANDY_API_KEY=sc_live_...
-from searchcandy import SearchCandy
+- Docs: https://searchcandy-labs.com/docs
+- Your API key: https://searchcandy-labs.com/docs/api-key
 
-sc = SearchCandy()
-sc.ingest_folder("./contracts")
+## Quickstart
 
-r = sc.query("What is the termination notice period?")
-print(r.quotes[0].text, "—", r.quotes[0].source_id)
+You need Python 3.9 or newer and an API key (see
+[Getting access](#getting-access)).
 
-t = sc.query("What does clause 99.9 say?")   # not in your data
-print(t.not_covered)   # True — zero tokens, no invention
+```bash
+pip install searchcandy
+export SEARCHCANDY_API_KEY=sc_live_...
 ```
 
-Docs: https://docs.searchcandy-labs.com
+```python
+from pathlib import Path
+from searchcandy import SearchCandy
 
-> **0.2.0 → 0.3.0**: the honest-refusal field is now `not_covered`.
-> `refused` still works as a deprecated alias, so existing code keeps
-> running unchanged.
+# A sample file in a folder of its own
+folder = Path("searchcandy-quickstart")
+folder.mkdir(exist_ok=True)
+(folder / "services-agreement.md").write_text(
+    "# Services Agreement\n\n"
+    "## Termination\n\n"
+    "Either party may terminate this agreement with sixty days' written notice.\n",
+    encoding="utf-8",
+)
+
+sc = SearchCandy()                      # reads SEARCHCANDY_API_KEY
+report = sc.ingest_folder(folder)       # returns once the new version is ready
+print("versions:", report.versions, "skipped:", report.skipped)
+
+r = sc.query("How much notice do we need to cancel?")
+for q in r.quotes:
+    print(q.source_id, "|", q.text)
+print("answered from version", r.version)
+```
+
+`ingest_folder` takes `.txt` and `.md` files and names every file it
+skips, with the reason. Run it again after you change a file: the file
+is updated in a new version, never duplicated. The example uses your
+key's default graph; pass `store="name"` to use another one.
+
+### Ask about a past date
+
+```python
+v = sc.versions.as_of("2026-10-01T09:00:00Z")   # the version answering at that instant
+old = sc.query("How much notice do we need to cancel?", version=v.number)
+old.version, old.behind                          # e.g. 1, True: an earlier version, on purpose
+```
+
+The timestamp needs a time zone (`Z` or `-07:00`); a time before your
+first upload raises `VersionNotFound`.
+
+### When no passage is returned
+
+`r.not_covered` is a field, not an exception. `True` means no
+supporting passage was returned. It is not proof that no relevant
+passage exists, and the flag can be wrong both ways, so your code
+decides what happens next, for example asking the user to add a
+document.
 
 ---
 
-## What this package is — and isn't
+## What this package is, and is not
 
-This is the **complete** client: typed, honest plumbing over the
-SearchCandy REST API. The retrieval engine itself never leaves our
-servers — which means this repo can be fully public, fully
-inspectable, and contains nothing to hide. What you see is exactly
-what runs in your process.
+This is the **complete** client: typed plumbing over the TGM REST API.
+The engine itself runs on our servers, which is why this repo can be
+fully public: what you see is exactly what runs in your process.
 
-- Typed responses — `not_covered` is a **field, not an exception**
-- The retry law: reads retry safely · ingest submits retry with the
-  same idempotency key (double-billing is structurally impossible) ·
-  billing pauses never auto-retry
-- `ingest_folder` skips loudly by name — nothing is silently dropped
+- Typed responses: `not_covered` is a **field, not an exception**
+- Retries: reads retry safely; ingest submits retry with the same
+  idempotency key, so a retried upload is never billed twice; billing
+  pauses never retry on their own
+- `ingest_folder` skips loudly, by name: nothing is dropped silently
 - Every server error carries a `request_id` you can quote to support
 
 ## Versions
@@ -50,21 +91,22 @@ pointer you can move.
 ```python
 sc = SearchCandy()
 
-sc.ingest_folder("./contracts", store="client-contracts")      # → v1
+sc.create_graph("client-contracts")                             # once
+sc.ingest_folder("./contracts", store="client-contracts")       # → v1
 sc.ingest([{"source_id": "policy.md", "content": new_text}],
-          store="client-contracts")                            # → v2: policy.md UPDATED, not duplicated
-rep = sc.remove(["old-addendum.md"], store="client-contracts") # → v3
-rep.removed, rep.not_present, rep.version                      # ["old-addendum.md"], [], 3
+          store="client-contracts")                             # → v2: policy.md UPDATED, not duplicated
+rep = sc.remove(["old-addendum.md"], store="client-contracts")  # → v3
+rep.removed, rep.not_present, rep.version                       # ["old-addendum.md"], [], 3
 
 r  = sc.query("What is the notice period?", store="client-contracts")
-r.version, r.current_version, r.pinned, r.store_generation     # 3, 3, False, "…"
+r.version, r.current_version, r.pinned, r.store_generation      # 3, 3, False, "…"
 r0 = sc.query("What is the notice period?", store="client-contracts", version=1)
-r0.version, r0.behind                                          # 1, True — yesterday's answer
+r0.version, r0.behind                                           # 1, True: version 1's answer
 ```
 
 Re-ingesting an existing `source_id` is an **update**, not a
 duplicate: in the same version its old passages stop answering and the
-new ones start. `remove()` takes documents out of current answers —
+new ones start. `remove()` takes documents out of current answers;
 earlier versions still contain them, so the history stays complete. To
 erase documents from our disks, delete the graph.
 
@@ -77,7 +119,7 @@ for v in page:
 
 for v in sc.versions.all(store="client-contracts"): ...       # every page (audit export)
 sc.versions.get(3, store="client-contracts")
-for sid in sc.versions.documents(3, store="client-contracts"): ...
+for d in sc.versions.documents(3, store="client-contracts"): ...
 sc.versions.as_of("2026-08-19T10:00:00Z", store="client-contracts")
 ```
 
@@ -106,47 +148,57 @@ sc.drafts.publish("policy-2026", store="client-contracts")   # → v5; DraftBehi
 
 Publish is never a merge: what you tested is what ships. If versions
 reached `current` after the draft was opened, publish is refused the
-way git refuses a non-fast-forward push — `DraftBehind` lists exactly
+way git refuses a non-fast-forward push: `DraftBehind` lists exactly
 which versions would stop being current, and `accept_behind=True` is
 the force.
 
 ## Errors you can branch on
 
-A "not in your data" answer is **not** an error: it is
-`r.not_covered == True`, with zero served tokens.
+A question with no supporting passage is **not** an error: it is
+`r.not_covered == True`.
 
 | Exception | When |
 |---|---|
-| `AuthError` | 401 — missing/invalid key (`SEARCHCANDY_API_KEY` set?) |
-| `StoreAccessError` | 403/404 — not your graph |
-| `RequestError` | 400/413 — the request itself; message names the field |
-| `BudgetPausedError` | daily embedding budget reached — never auto-retried |
-| `YourEmbeddingEndpointError` | 502 — your BYOE endpoint failed |
+| `AuthError` | 401: missing or invalid key (`SEARCHCANDY_API_KEY` set?) |
+| `StoreAccessError` | 403/404: not your graph |
+| `RequestError` | 400/413: the request itself; the message names the field |
+| `BudgetPausedError` | daily embedding budget reached; never retried on its own |
+| `YourEmbeddingEndpointError` | 502: your own embedding endpoint failed |
 | `IngestFailedError` | a job ended in error; carries `job_id`, `.partial`, `.remaining` |
-| `GraphNotReadyError` | a query or mutation while a write job runs — the SDK polls submits for you |
-| `SearchCandyServerError` | 5xx — our side; quote the `request_id` |
-| `SearchCandyUnavailable` | network failure after retries |
+| `GraphNotReadyError` | a query or change while a write job runs; the SDK waits out submits for you |
+| `SearchCandyServerError` | 5xx: our side; quote the `request_id` |
+| `SearchCandyUnavailable` | the API could not be reached after retries |
 
 **Versioning**: `VersionNotFound` · `StoreUnversioned` ·
 `DraftNotFound` · `DraftBehind` (carries `versions_since_fork`) ·
 `DraftClosed` · `NameTaken`
 
-**Graph integrity** — a graph refuses to open rather than answer from
-a damaged or mismatched one:
+**Graph integrity**: a graph refuses to open rather than answer from
+a damaged or mismatched one.
 
 | Exception | When |
 |---|---|
-| `GraphIncomplete` | the graph loaded less than it sealed — damage. Not retryable; restore from a snapshot |
+| `GraphIncomplete` | the graph loaded less than it sealed (damage). Not retryable; restore from a snapshot |
 | `EmbeddingModelMismatch` | the graph is being read by a different embedding model than built it |
 
-**Bring-your-own embeddings**: `CredentialVaultError` ·
+**Bring your own embeddings**: `CredentialVaultError` ·
 `EmbeddingServerRevokedError` · `ServerInUse` · `ServerNotReady`
 
 ## Getting access
 
-Pilots are concierge-onboarded — no self-serve signup yet, by design.
-Email **hello@searchcandy-labs.com** and you'll be querying your own
-documents within a day of a yes.
+We set up every account after a short call:
+[book one](https://cal.com/searchcandy-labs/30min) or email
+**hello@searchcandy-labs.com**. You then get a log-in link for the
+console (https://searchcandy-labs.com/login), and the console shows
+your API key once. Details: https://searchcandy-labs.com/docs/api-key
 
-MIT licensed. Issues and PRs welcome — this client is developed in
-the open.
+## Version notes
+
+See [CHANGELOG.md](CHANGELOG.md). In short: 0.3.1 fixes two dead links
+(the docs, and the vault used to register your own embedding server)
+and gives up faster when the API cannot be reached. 0.3.0 renamed
+`refused` to `not_covered`; `refused` still works as a deprecated
+alias, so code written for 0.1.0 keeps running.
+
+MIT licensed. Issues and PRs welcome: this client is developed in the
+open.
