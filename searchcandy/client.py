@@ -78,10 +78,13 @@ class SearchCandy:
             raise AuthError(
                 "no API key: pass api_key=... or set the "
                 f"{ENV_KEY} environment variable")
+        # timeout=None still means "no limit on answers", as in 0.3.0;
+        # opening a connection keeps its own short bound either way
+        connect = (CONNECT_TIMEOUT if timeout is None
+                   else min(timeout, CONNECT_TIMEOUT))
         self._http = httpx.Client(
             base_url=base_url,
-            timeout=httpx.Timeout(timeout,
-                                  connect=min(timeout, CONNECT_TIMEOUT)),
+            timeout=httpx.Timeout(timeout, connect=connect),
             transport=transport,
             headers={"Authorization": f"Bearer {key}",
                      "User-Agent": f"searchcandy-python/{SDK_VERSION}"})

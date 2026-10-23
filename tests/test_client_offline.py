@@ -153,6 +153,10 @@ class ClientOfflineTest(unittest.TestCase):
         self.assertEqual(sc._http.timeout.read, 75.0)
         quick = SearchCandy(api_key="sc_live_test", timeout=5.0)
         self.assertEqual(quick._http.timeout.connect, 5.0)
+        # 0.3.0 accepted timeout=None ("no limit"); it must still work
+        unbounded = SearchCandy(api_key="sc_live_test", timeout=None)
+        self.assertIsNone(unbounded._http.timeout.read)
+        self.assertEqual(unbounded._http.timeout.connect, 10.0)
 
     def test_unreachable_api_names_the_address(self):
         def refuse(request):

@@ -53,6 +53,9 @@ TEXT_TYPES = (".md", ".txt")
 SHOW_PASSAGES = 3
 #: characters of a passage shown with `ask --short` (default: whole)
 SHORT_CHARS = 700
+#: seconds `ask`, `check` and `load` wait for a graph that is still
+#: opening after a change (the API answers `store_warming` meanwhile)
+OPEN_WAIT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -325,6 +328,27 @@ def word_for_word(lib: Library, passage, version: Optional[int],
     return False, "NO: not found in the local copy (look into this)"
 
 
+def query(sc: SearchCandy, question: str, graph: str,
+          version: Optional[int]):
+    """sc.query, waiting out a graph that is still opening after a
+    change. The API says so (GraphNotReadyError) and, for a question,
+    the SDK leaves the retry to the caller: on a call that must read
+    as a short wait, never as a STOP."""
+    deadline = time.monotonic() + OPEN_WAIT_SECONDS
+    told = False
+    while True:
+        try:
+            return sc.query(question, store=graph, version=version)
+        except GraphNotReadyError as exc:
+            if time.monotonic() > deadline:
+                raise DemoError(f"{graph} still cannot answer after "
+                                f"{OPEN_WAIT_SECONDS} s: {exc}") from None
+            if not told:
+                say(f"  ({graph} is opening after a change; waiting)")
+                told = True
+            time.sleep(exc.retry_after_s or 2.0)
+
+
 def resolve_question(lib: Library, asked: str) -> Optional[Question]:
     for q in lib.questions:
         if q.key == asked:
@@ -399,6 +423,19 @@ def _ensure_graph(sc: SearchCandy, graph: str) -> None:
         pass                     # made a moment ago by another run
 
 
+def _timed(sc: SearchCandy, lib: Library, graph: str,
+           started: float) -> None:
+    """Say how long the step took, then ask one scripted question so
+    the graph is open again (it reopens after every change) before
+    anyone watches. Together the two times are what a live update on
+    a call costs."""
+    loaded = time.perf_counter() - started
+    asked = time.perf_counter()
+    query(sc, lib.questions[0].text, graph, None)
+    say(f"    took {loaded:.1f} s to load; the first question after it "
+        f"answered in {time.perf_counter() - asked:.1f} s")
+
+
 def cmd_load(sc: SearchCandy, args) -> int:
     for lib in selected(args.only):
         graph = graph_name(lib, args.prefix)
@@ -413,8 +450,11 @@ def cmd_load(sc: SearchCandy, args) -> int:
                 folder = lib.folder / "v1"
                 say(f"  step 1: sc.ingest_folder({folder.relative_to(HERE)}, "
                     f"store={graph!r})   # no chunk size, no settings")
-                report = sc.ingest_folder(folder, store=graph)
+                started = time.perf_counter()
+                report = sc.ingest_folder(folder, store=graph,
+                                          poll_timeout=args.wait)
                 _receipt(sc, graph, folder, report)
+                _timed(sc, lib, graph, started)
                 loaded_now = True
                 steps = find_steps(sc, lib, graph)
         if args.step in ("2", "all"):
@@ -431,8 +471,11 @@ def cmd_load(sc: SearchCandy, args) -> int:
                 folder = lib.folder / "v2"
                 say(f"  step 2: sc.ingest_folder({folder.relative_to(HERE)}, "
                     f"store={graph!r})")
-                report = sc.ingest_folder(folder, store=graph)
+                started = time.perf_counter()
+                report = sc.ingest_folder(folder, store=graph,
+                                          poll_timeout=args.wait)
                 _receipt(sc, graph, folder, report)
+                _timed(sc, lib, graph, started)
     return 0
 
 
@@ -443,13 +486,19 @@ def cmd_ask(sc: SearchCandy, args) -> int:
     question = scripted.text if scripted else args.question
     show_all = args.all or (scripted is not None and scripted.view == "all")
     steps = find_steps(sc, lib, graph)
+    # a scripted "before" question asks about the time before the
+    # update even when the flag is forgotten (once step 2 exists;
+    # until then the current version IS the one before the update)
+    before = args.before_update or (scripted is not None
+                                    and scripted.when == "before"
+                                    and steps[1] is not None)
     version: Optional[int] = None
     when = "the current version"
     if args.version is not None:
         version, when = args.version, f"version {args.version}, pinned"
-    elif args.as_of or args.before_update:
-        instant = (before_update(steps) if args.before_update
-                   else parse_when(args.as_of))
+    elif args.as_of or before:
+        instant = (parse_when(args.as_of) if args.as_of
+                   else before_update(steps))
         try:
             v = sc.versions.as_of(instant, store=graph)
         except VersionNotFound:
@@ -460,7 +509,7 @@ def cmd_ask(sc: SearchCandy, args) -> int:
         when = (f"as of {instant}: version {v.number} was answering "
                 f"(sealed {local(parse_ts(v.created_at)) if v.created_at else '?'})")
     started = time.perf_counter()
-    r = sc.query(question, store=graph, version=version)
+    r = query(sc, question, graph, version)
     seconds = time.perf_counter() - started
     say()
     say(f"{lib.title}")
@@ -549,7 +598,7 @@ def cmd_check(sc: SearchCandy, args) -> int:
                 version = sc.versions.as_of(before_update(steps),
                                             store=graph).number
             started = time.perf_counter()
-            r = sc.query(q.text, store=graph, version=version)
+            r = query(sc, q.text, graph, version)
             seconds = time.perf_counter() - started
             served = list(r.context_atoms) + list(r.quotes)
             quote_files = [p.source_id for p in r.quotes]
@@ -570,7 +619,7 @@ def cmd_check(sc: SearchCandy, args) -> int:
                 if ok is False:
                     notes.append(f"not word for word: {p.source_id}")
                     break
-            again = sc.query(q.text, store=graph, version=r.version)
+            again = query(sc, q.text, graph, r.version)
             if ([(p.source_id, p.text) for p in again.context_atoms]
                     != [(p.source_id, p.text) for p in r.context_atoms]):
                 notes.append("a second ask returned different passages")
@@ -641,6 +690,9 @@ def build_parser() -> argparse.ArgumentParser:
     load.add_argument("--step", choices=("1", "2", "all"), default="all")
     load.add_argument("--only", help="comma-separated libraries")
     load.add_argument("--gap-seconds", type=int, default=10)
+    load.add_argument("--wait", type=int, default=300,
+                      help="seconds to wait for one upload to seal before "
+                           "giving up (default 300)")
     load.add_argument("--force", action="store_true",
                       help="load a step again even if it is loaded")
     check = sub.add_parser("check", help="rehearse every scripted question")

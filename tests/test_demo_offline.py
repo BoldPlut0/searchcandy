@@ -45,6 +45,9 @@ class FakeTGM:
         self.graphs = {}          # sid -> {"name", "versions": [...]}
         self.jobs = {}
         self.clock = datetime(2026, 10, 27, 17, 0, tzinfo=timezone.utc)
+        #: questions still to refuse with 409 store_warming, as the API
+        #: does while a graph reopens after a change
+        self.warming = 0
 
     # -- helpers ----------------------------------------------------------
     def _docs_at(self, g, number):
@@ -67,6 +70,10 @@ class FakeTGM:
         return {k: val for k, val in v.items() if not k.startswith("_")}
 
     def _answer(self, sid, body):
+        if self.warming > 0:
+            self.warming -= 1
+            return httpx.Response(409, headers={"retry-after": "1"}, json={
+                "error": {"code": "store_warming", "message": "opening"}})
         g = self.graphs[sid]
         current = len(g["versions"])
         number = int(body.get("version") or current)
@@ -300,6 +307,29 @@ class DemoOfflineTest(unittest.TestCase):
         self.assertNotIn("with sixty days' written notice.\n     word", out)
         self.assertIn("word for word: yes", out)
         self.assertNotIn("word for word: NO", out)
+
+    def test_a_scripted_before_question_needs_no_flag(self):
+        run_demo(["load", "--only", "contracts"], self.sc)
+        code, out = run_demo(["ask", "contracts", "notice-before", "--all",
+                              "--limit", "999"], self.sc)
+        self.assertEqual(code, 0, out)
+        self.assertIn("answered from version 1", out)
+        self.assertIn("thirty days' written notice.", out)
+
+    def test_waits_while_the_graph_reopens(self):
+        run_demo(["load", "--only", "help-center"], self.sc)
+        self.fake.warming = 2
+        code, out = run_demo(["ask", "help-center", "refund-now"], self.sc)
+        self.assertEqual(code, 0, out)
+        self.assertIn("demo-help-center is opening after a change", out)
+        self.assertIn("answered from version 2", out)
+
+    def test_load_reports_how_long_each_step_took(self):
+        code, out = run_demo(["load", "--only", "regulation"], self.sc)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(re.findall(
+            r"took \d+\.\d s to load; the first question after it answered "
+            r"in \d+\.\d s", out)), 2, out)
 
     def test_ask_now_and_as_of(self):
         run_demo(["load"], self.sc)
