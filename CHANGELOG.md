@@ -17,9 +17,13 @@
   an unreachable API is reported in well under a minute instead of
   about four. Slow answers still get the full `timeout` (75 seconds by
   default). The error now names the address it tried.
-- **README:** a quickstart that runs as written, asking about a past
-  date with `versions.as_of`, and plain wording for `not_covered` (no
-  supporting passage was returned; not proof that none exists).
+- **README:** a quickstart that runs as written (checked against the
+  live service) and prints the passages your AI receives,
+  `r.context_atoms`; `r.quotes` holds one passage per file, the first
+  served from it, so it can show a file's title rather than the clause
+  that answers. Also: asking about a past date with `versions.as_of`,
+  and plain wording for `not_covered` (no supporting passage was
+  returned; not proof that none exists).
 - Messages no longer use long dashes; nothing else in the API changed.
 
 ## 0.3.0 (2026-08-28)

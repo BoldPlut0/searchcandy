@@ -252,16 +252,9 @@ class DemoOfflineTest(unittest.TestCase):
         total = sum(len(lib.questions) for lib in demo.LIBRARIES.values())
         self.assertIn(f"{total} of {total} ready", out)
         self.assertNotIn("FAIL", out)
-        # the fake's word-overlap ranking does not put the refund line
-        # first: a WARN that names the flag and the real position
-        warn = [line for line in out.splitlines()
-                if line.startswith("WARN  help-center  refund-now")]
-        self.assertEqual(len(warn), 1, out)
-        self.assertRegex(warn[0], r"on screen add (--all )?--limit \d+")
-        limit = int(re.search(r"--limit (\d+)", warn[0])[1])
-        code, shown = run_demo(["ask", "help-center", "refund-now", "--all",
-                                "--limit", str(limit)], self.sc)
-        self.assertIn("Monthly plans can be refunded within 14 days", shown)
+        self.assertRegex(out, r"PASS  contracts    biggest-customer .* ranked "
+                              r"customers\.md #\d, services-agreement-"
+                              r"northwind\.md #\d")
 
     def test_check_fails_on_a_wrong_version_answer(self):
         run_demo(["load", "--only", "help-center"], self.sc)
@@ -280,7 +273,7 @@ class DemoOfflineTest(unittest.TestCase):
         run_demo(["load", "--step", "1", "--only", "contracts"], self.sc)
         code, out = run_demo(["check", "--only", "contracts"], self.sc)
         self.assertEqual(code, 0, out)
-        self.assertRegex(out, r"(PASS|WARN)  contracts    notice-before")
+        self.assertIn("PASS  contracts    notice-before", out)
         self.assertIn("SKIP  contracts    notice-now", out)
         self.assertIn("1 of 1 ready", out)
         self.assertIn("3 wait for step 2", out)
@@ -288,6 +281,13 @@ class DemoOfflineTest(unittest.TestCase):
                               "--before-update"], self.sc)
         self.assertEqual(code, 2)
         self.assertIn("ask without --before-update", out)
+        # before the live update the "now" question is answered by
+        # version 1: its OWN sentence must be marked (found live, 10-23)
+        code, out = run_demo(["ask", "contracts", "notice-now"], self.sc)
+        self.assertEqual(code, 0, out)
+        self.assertIn("answered from version 1", out)
+        self.assertIn("thirty days' written notice.\n     ▲ the answer is "
+                      "in this passage", out)
 
     def test_check_says_not_loaded(self):
         code, out = run_demo(["check", "--only", "contracts"], self.sc)
@@ -297,24 +297,23 @@ class DemoOfflineTest(unittest.TestCase):
     def test_ask_before_the_update_answers_from_version_one(self):
         run_demo(["load"], self.sc)
         code, out = run_demo(["ask", "contracts", "notice-now",
-                              "--before-update", "--all",
-                              "--limit", "999"], self.sc)
+                              "--before-update", "--all"], self.sc)
         self.assertEqual(code, 0, out)
         self.assertIn("answered from version 1 (an earlier version, on "
                       "purpose)", out)
         self.assertIn("terminate this agreement with thirty days' written "
                       "notice.", out)
-        self.assertNotIn("with sixty days' written notice.\n     word", out)
+        self.assertNotIn("terminate this agreement with sixty days'", out)
         self.assertIn("word for word: yes", out)
         self.assertNotIn("word for word: NO", out)
 
     def test_a_scripted_before_question_needs_no_flag(self):
         run_demo(["load", "--only", "contracts"], self.sc)
-        code, out = run_demo(["ask", "contracts", "notice-before", "--all",
-                              "--limit", "999"], self.sc)
+        code, out = run_demo(["ask", "contracts", "notice-before"], self.sc)
         self.assertEqual(code, 0, out)
         self.assertIn("answered from version 1", out)
-        self.assertIn("thirty days' written notice.", out)
+        self.assertIn("thirty days' written notice.\n     ▲ the answer is "
+                      "in this passage", out)
 
     def test_waits_while_the_graph_reopens(self):
         run_demo(["load", "--only", "help-center"], self.sc)
@@ -323,6 +322,16 @@ class DemoOfflineTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("demo-help-center is opening after a change", out)
         self.assertIn("answered from version 2", out)
+
+    def test_find_points_at_a_passage_for_a_free_question(self):
+        run_demo(["load", "--only", "contracts"], self.sc)
+        code, out = run_demo(["ask", "contracts", "Which law governs the "
+                              "NDA?", "--files", "1", "--find", "FABRIKAM"],
+                             self.sc)
+        self.assertEqual(code, 0, out)
+        # the file holding the found words is shown even past --files 1
+        self.assertIn("nda-fabrikam.md · version 2", out)
+        self.assertIn("▲ the answer is in this passage", out)
 
     def test_load_reports_how_long_each_step_took(self):
         code, out = run_demo(["load", "--only", "regulation"], self.sc)
@@ -333,14 +342,15 @@ class DemoOfflineTest(unittest.TestCase):
 
     def test_ask_now_and_as_of(self):
         run_demo(["load"], self.sc)
-        # the fake ranks by shared words, so look at every passage: the
-        # point here is the version, not the fake's ranking
-        code, out = run_demo(["ask", "help-center", "refund-now", "--all",
-                              "--limit", "999"], self.sc)
+        # whatever the fake's crude ranking, the answer passage is shown
+        # and marked; the other version's wording never appears
+        code, out = run_demo(["ask", "help-center", "refund-now"], self.sc)
         self.assertEqual(code, 0, out)
         self.assertIn("answered from version 2", out)
-        self.assertIn("within 14 days of payment", out)
+        self.assertIn("within 14 days of payment.\n     ▲ the answer is in "
+                      "this passage", out)
         self.assertNotIn("within 30 days of payment", out)
+        self.assertRegex(out, r"TGM returned \d+ passages")
         code, out = run_demo(["ask", "help-center", "refund-now",
                               "--as-of", "2020-01-01"], self.sc)
         self.assertEqual(code, 2)

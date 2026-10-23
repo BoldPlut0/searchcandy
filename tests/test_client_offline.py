@@ -50,16 +50,20 @@ class FakeAPI:
                 "status": "sealed", "version": 1, "embed_tokens": 20,
                 "added": 1, "updated": 0})
         if method == "POST" and path == "/v1/query":
-            clause = ("Either party may terminate this agreement with "
-                      "sixty days' written notice.")
+            # the live service's shape (measured 2026-10-23): a file's
+            # passages in its reading order, title first; `quotes` holds
+            # the FIRST passage served from each file, so the title
+            title = _atom("# Services Agreement\n\n## Termination\n",
+                          "services-agreement.md", "n1", 4)
+            clause = _atom("Either party may terminate this agreement with "
+                           "sixty days' written notice.\n",
+                           "services-agreement.md", "n2", 12)
             return httpx.Response(200, json={
                 "result": {"query": json.loads(request.content)["query"],
                            "not_covered": False,
-                           "context_atoms": [_atom(clause,
-                                                   "services-agreement.md")],
-                           "verbatim_quotes": [_atom(clause,
-                                                     "services-agreement.md")],
-                           "telemetry": {"total_tokens": 12}},
+                           "context_atoms": [title, clause],
+                           "verbatim_quotes": [title],
+                           "telemetry": {"total_tokens": 16}},
                 "request_id": "req_1", "store_id": "st_test",
                 "version": {"number": 1, "current_version": 1,
                             "pinned": False}})
@@ -107,7 +111,8 @@ class ClientOfflineTest(unittest.TestCase):
         self.assertFalse(r.not_covered)
         self.assertEqual([q.source_id for q in r.quotes],
                          ["services-agreement.md"])
-        self.assertIn("sixty days' written notice", r.quotes[0].text)
+        self.assertIn("sixty days' written notice",
+                      r.context_atoms[1].text)
 
         first = api.requests[0]
         self.assertEqual(first.headers["authorization"],
@@ -143,8 +148,10 @@ class ClientOfflineTest(unittest.TestCase):
         lines = [" ".join(str(a) for a in c.args)
                  for c in printed.call_args_list]
         self.assertEqual(lines[0], "versions: [1] skipped: []")
-        self.assertIn("services-agreement.md | Either party may terminate",
-                      lines[1])
+        # the clause itself must be printed, not only the file's title
+        self.assertIn("services-agreement.md | Either party may terminate "
+                      "this agreement with sixty days' written notice.",
+                      lines)
         self.assertEqual(lines[-1], "answered from version 1")
 
     def test_connect_timeout_is_short_and_reads_stay_long(self):

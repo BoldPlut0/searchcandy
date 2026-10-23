@@ -49,8 +49,9 @@ from searchcandy import (GraphNotReadyError, NameTaken,  # noqa: E402
 
 DATA = HERE / "data"
 TEXT_TYPES = (".md", ".txt")
-#: passages `ask` shows unless told otherwise (`--limit`)
-SHOW_PASSAGES = 3
+#: files `ask` shows unless told otherwise (`--files`); a scripted
+#: question always shows every file that holds its answer
+SHOW_FILES = 3
 #: characters of a passage shown with `ask --short` (default: whole)
 SHORT_CHARS = 700
 #: seconds `ask`, `check` and `load` wait for a graph that is still
@@ -71,9 +72,6 @@ class Question:
     phrases: Tuple[str, ...]
     #: what this question shows, in the site's words
     shows: str
-    #: "quotes" shows the best passage of each file; "all" every served
-    #: passage (two facts from ONE file need it)
-    view: str = "quotes"
 
 
 @dataclass(frozen=True)
@@ -89,6 +87,7 @@ class Library:
 
 NORTHWIND = "services-agreement-northwind.md"
 RULE = "17-cfr-240.15c6-1.md"
+NOTICE = "amendment-notice-88-fr-13872.md"
 PROCEDURE = "settlement-desk-procedure.md"
 
 LIBRARIES: Dict[str, Library] = {lib.name: lib for lib in (
@@ -121,16 +120,17 @@ LIBRARIES: Dict[str, Library] = {lib.name: lib for lib in (
                   "days' written notice.",
                   "Invoices are issued monthly and are payable within "
                   "thirty days of receipt."),
-                 "two facts from two places in one contract", view="all"),
+                 "two facts from two places in one contract"),
     )),
     Library("regulation", "Compliance: SEC Rule 15c6-1 (public text) and "
             "a made-up desk procedure", (
         Question("cycle-now",
                  "What is the standard settlement cycle for a "
                  "broker-dealer trade?",
-                 "now", (RULE,),
+                 "now", (RULE, NOTICE),
                  ("later than the first business day after the date of "
-                  "the contract",),
+                  "the contract",
+                  "to one business day after the trade date"),
                  "the whole passage, with its file and version"),
         Question("cycle-before",
                  "What is the standard settlement cycle for a "
@@ -162,12 +162,14 @@ LIBRARIES: Dict[str, Library] = {lib.name: lib for lib in (
                  "now", (PROCEDURE, RULE),
                  ("The Alternatives Desk books trades in limited "
                   "partnership interests",
-                  "Paragraph (a) of this section shall not apply to"),
+                  "Contracts for the purchase or sale of limited "
+                  "partnership interests that are not listed on an "
+                  "exchange"),
                  "two facts: who books it, and the rule's exception"),
         Question("effective",
                  "When did the one-business-day settlement rule take "
                  "effect?",
-                 "now", ("amendment-notice-88-fr-13872.md",),
+                 "now", (NOTICE,),
                  ("Effective date: May 5, 2023.",),
                  "the official notice, word for word"),
     )),
@@ -484,7 +486,6 @@ def cmd_ask(sc: SearchCandy, args) -> int:
     graph = graph_name(lib, args.prefix)
     scripted = resolve_question(lib, args.question)
     question = scripted.text if scripted else args.question
-    show_all = args.all or (scripted is not None and scripted.view == "all")
     steps = find_steps(sc, lib, graph)
     # a scripted "before" question asks about the time before the
     # update even when the flag is forgotten (once step 2 exists;
@@ -517,16 +518,73 @@ def cmd_ask(sc: SearchCandy, args) -> int:
     say(f"   asked {when}; answered from version {r.version}"
         f"{' (an earlier version, on purpose)' if r.behind else ''}"
         f" in {seconds:.2f} s")
-    passages = r.context_atoms if show_all else r.quotes
-    for i, p in enumerate(passages[:args.limit], 1):
+    files = served_files(r)
+    say(f"   TGM returned {len(r.context_atoms)} passages "
+        f"({r.telemetry.total_tokens:,} tokens) from {len(files)} file(s): "
+        f"the file it ranks first comes first, each file's passages in "
+        f"that file's own reading order")
+    # the passages to point at: the answer words of every scripted
+    # question with this text (its "now" AND "before" wording, so the
+    # version that answered gets its own sentence marked), and whatever
+    # --find names. Never a guess about the answer
+    marks = [words for q in lib.questions if q.text == question
+             for words in q.phrases]
+    marks += args.find or []
+    marked = [i for i, (_, ps) in enumerate(files, 1)
+              if any(_has(p, marks) for p in ps)]
+    show = max([args.files] + marked)
+    for rank, (source_id, passages) in enumerate(files[:show], 1):
+        hits = [p for p in passages if _has(p, marks)]
+        if args.all or (not marks and rank == 1):
+            shown = passages
+        else:
+            shown = hits
+        checks = [word_for_word(lib, p, r.version, steps)[0]
+                  for p in passages]
         say()
-        say(f"  {i}. {p.source_id} · version {r.version}")
-        show_passage_text(p.text, args.short)
-        say(f"     word for word: {word_for_word(lib, p, r.version, steps)[1]}")
+        say(f"  {rank}. {source_id} · version {r.version} · "
+            f"{len(passages)} passage(s) · {_verdict(checks)}")
+        for p in shown:
+            show_passage_text(p.text, args.short)
+            if p in hits:
+                say("     ▲ the answer is in this passage")
+        rest = len(passages) - len(shown)
+        if rest:
+            say(f"     (+ {rest} more passage(s) of this file, in its "
+                f"reading order: --all shows them)")
+    if len(files) > show:
+        say()
+        say(f"  (+ {len(files) - show} more file(s): "
+            f"{', '.join(f for f, _ in files[show:])}; "
+            f"--files {len(files)} shows them)")
     if r.not_covered:
         say()
         say("  no supporting passage was returned (not_covered=True)")
     return 0
+
+
+def served_files(r) -> List[Tuple[str, list]]:
+    """The served passages grouped by file, in the order TGM served
+    them: the file it ranks first comes first, and each file's passages
+    stay in that file's own reading order."""
+    groups: Dict[str, list] = {}
+    for p in r.context_atoms:
+        groups.setdefault(p.source_id, []).append(p)
+    return list(groups.items())
+
+
+def _has(passage, marks: Sequence[str]) -> bool:
+    text = passage.text.lower()
+    return any(m.lower() in text for m in marks)
+
+
+def _verdict(checks: Sequence[Optional[bool]]) -> str:
+    if False in checks:
+        bad = sum(1 for c in checks if c is False)
+        return f"word for word: NO for {bad} of {len(checks)} (look into this)"
+    if None in checks:
+        return "word for word: not checked (not a file this demo loaded)"
+    return f"word for word: yes ({len(checks)} of {len(checks)})"
 
 
 def cmd_timeline(sc: SearchCandy, args) -> int:
@@ -557,7 +615,6 @@ def cmd_questions(sc: Optional[SearchCandy], args) -> int:
         say(f"{lib.title}")
         for q in lib.questions:
             flag = " --before-update" if q.when == "before" else ""
-            flag += " --all" if q.view == "all" else ""
             say(f"  {q.key:17} {q.text}")
             say(f"  {'':17} shows: {q.shows}")
             say(f"  {'':17} {me} ask {lib.name} {q.key}{flag}")
@@ -570,8 +627,8 @@ def cmd_check(sc: SearchCandy, args) -> int:
     plainly which ones are ready: PASS needs the expected files and
     words back, the expected version, every passage word for word
     against the local file, and the same passages on a second ask.
-    WARN = all of that holds, but `ask` would not show it in its first
-    three passages: the note names the flag to use on screen.
+    The note says where TGM ranked each needed file (`ask` always
+    shows the files that hold a scripted answer).
 
     With only step 1 loaded (step 2 kept for the call, loaded live),
     the "before" questions are asked of the current version, which IS
@@ -623,21 +680,12 @@ def cmd_check(sc: SearchCandy, args) -> int:
             if ([(p.source_id, p.text) for p in again.context_atoms]
                     != [(p.source_id, p.text) for p in r.context_atoms]):
                 notes.append("a second ask returned different passages")
-            # where each needed piece lands in what `ask` shows
-            places = _places(r.context_atoms if q.view == "all"
-                             else r.quotes, q.phrases)
-            verdict = "FAIL" if notes else "PASS"
-            if verdict == "PASS" and (None in places
-                                      or max(places) > SHOW_PASSAGES):
-                verdict = "WARN"
-                if None in places:      # not in a file's best passage
-                    every = _places(r.context_atoms, q.phrases)
-                    notes.append(f"on screen add --all --limit "
-                                 f"{max(every)}")
-                else:
-                    notes.append(f"on screen add --limit {max(places)}")
-            notes.append("shown at " + ", ".join(
-                f"#{n}" if n else "not shown" for n in places))
+            # where TGM ranked each needed file, for the presenter
+            order = [f for f, _ in served_files(r)]
+            notes.append("ranked " + ", ".join(
+                f"{f} #{order.index(f) + 1}" if f in order else f"{f} -"
+                for f in q.files))
+            verdict = "PASS" if len(notes) == 1 else "FAIL"
             rows.append((verdict, lib.name, q.key, str(r.version),
                          f"{seconds:.2f}", "; ".join(notes)))
     width = max(len(r[2]) for r in rows)
@@ -645,23 +693,14 @@ def cmd_check(sc: SearchCandy, args) -> int:
         say(f"{verdict}  {lib_name:12} {key:{width}}  v{version:3} "
             f"{seconds:>5} s  {note}")
     failed = sum(1 for r in rows if r[0] == "FAIL")
-    warned = sum(1 for r in rows if r[0] == "WARN")
     skipped = sum(1 for r in rows if r[0] == "SKIP")
     asked = len(rows) - skipped
     say()
     say(f"{asked - failed} of {asked} ready"
-        + (f" ({warned} need the flag in their note on screen)"
-           if warned else "")
         + (f"; {skipped} wait for step 2" if skipped else "")
         + ("" if not failed else
            "; swap or drop each FAIL question before the call (DEMO.md)"))
     return 1 if failed else 0
-
-
-def _places(passages, phrases) -> List[Optional[int]]:
-    """Each phrase's first position (1-based) among `passages`."""
-    return [next((i for i, p in enumerate(passages, 1)
-                  if words in p.text), None) for words in phrases]
 
 
 def selected(only: Optional[str]) -> List[Library]:
@@ -708,12 +747,16 @@ def build_parser() -> argparse.ArgumentParser:
                       help="as of just before step 2 was loaded")
     when.add_argument("--version", type=int)
     ask.add_argument("--all", action="store_true",
-                     help="every served passage, not one per file")
+                     help="every served passage of every shown file")
+    ask.add_argument("--find", action="append", metavar="WORDS",
+                     help="also point at the passages containing WORDS "
+                          "(case does not matter; repeatable)")
     ask.add_argument("--short", action="store_true",
                      help=f"cut passages at {SHORT_CHARS} characters "
                           f"(default: whole passages)")
-    ask.add_argument("--limit", type=int, default=SHOW_PASSAGES,
-                     help=f"passages to show (default {SHOW_PASSAGES})")
+    ask.add_argument("--files", type=int, default=SHOW_FILES,
+                     help=f"files to show (default {SHOW_FILES}; more "
+                          f"when a scripted answer needs them)")
     tl = sub.add_parser("timeline", help="every version of one library")
     tl.add_argument("library", choices=sorted(LIBRARIES))
     return p

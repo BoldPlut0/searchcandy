@@ -36,7 +36,7 @@ installed on your computer.
 export SEARCHCANDY_API_KEY=sc_live_...
 python3 examples/demo/demo.py status       # is the service answering? what is loaded?
 python3 examples/demo/demo.py load         # version 1, then version 2, of each library
-python3 examples/demo/demo.py check        # ask every scripted question: PASS, WARN or FAIL
+python3 examples/demo/demo.py check        # ask every scripted question: PASS or FAIL
 python3 examples/demo/demo.py questions    # the scripted questions and their commands
 python3 examples/demo/demo.py ask contracts notice-now
 python3 examples/demo/demo.py ask contracts notice-now --before-update
@@ -50,10 +50,15 @@ anything: a step that is already in the graph's timeline is skipped.
 
 `check` passes a question only when the expected files and words come
 back, from the expected version, every passage matches the local file
-word for word, and asking again returns the same passages. A WARN means
-the answer is right but sits below the first three passages on screen;
-its note names the flag to add.
+word for word, and asking again returns the same passages; its note
+says where TGM ranked each needed file.
+
+`ask` shows what your AI would receive: the files in the order TGM
+ranks them, each file's passages in that file's own reading order. It
+marks the passage that holds a scripted question's answer (or the words
+you give `--find`, for a question made up on the spot) and shows the
+other passages on `--all`.
 
 The tests in `tests/test_demo_offline.py` run the script against a fake
 service on your computer; only `check` against the real service shows
-what TGM itself returns.
+what TGM itself returns (on 2026-10-23: all 14 questions PASS).

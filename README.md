@@ -37,10 +37,15 @@ report = sc.ingest_folder(folder)       # returns once the new version is ready
 print("versions:", report.versions, "skipped:", report.skipped)
 
 r = sc.query("How much notice do we need to cancel?")
-for q in r.quotes:
-    print(q.source_id, "|", q.text)
+for p in r.context_atoms:               # every passage your AI receives, in order
+    print(p.source_id, "|", p.text.strip())
 print("answered from version", r.version)
 ```
+
+`r.context_atoms` is what your AI reads: every passage TGM returns, word
+for word, the file TGM ranks first coming first and each file's passages
+in that file's own reading order. `r.quotes` keeps one passage per file
+(the first one served from it), handy for listing which files were used.
 
 `ingest_folder` takes `.txt` and `.md` files and names every file it
 skips, with the reason. Run it again after you change a file: the file
