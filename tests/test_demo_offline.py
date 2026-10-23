@@ -268,6 +268,20 @@ class DemoOfflineTest(unittest.TestCase):
         self.assertIn("FAIL  help-center  refund-now", out)
         self.assertIn("missing words", out)
 
+    def test_check_on_call_day_with_only_step_one(self):
+        # step 2 kept back to load live on the call
+        run_demo(["load", "--step", "1", "--only", "contracts"], self.sc)
+        code, out = run_demo(["check", "--only", "contracts"], self.sc)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"(PASS|WARN)  contracts    notice-before")
+        self.assertIn("SKIP  contracts    notice-now", out)
+        self.assertIn("1 of 1 ready", out)
+        self.assertIn("3 wait for step 2", out)
+        code, out = run_demo(["ask", "contracts", "notice-now",
+                              "--before-update"], self.sc)
+        self.assertEqual(code, 2)
+        self.assertIn("ask without --before-update", out)
+
     def test_check_says_not_loaded(self):
         code, out = run_demo(["check", "--only", "contracts"], self.sc)
         self.assertEqual(code, 1)

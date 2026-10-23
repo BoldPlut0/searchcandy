@@ -305,8 +305,9 @@ def before_update(steps) -> str:
     """An instant one second before step 2 was sealed."""
     step2 = steps[1]
     if step2 is None or not step2.created_at:
-        raise DemoError("step 2 is not loaded yet, so there is no 'before "
-                        "the update': run `load --step 2` first")
+        raise DemoError("step 2 is not loaded yet, so the current version "
+                        "IS the one before the update: ask without "
+                        "--before-update, or run `load --step 2` first")
     return local(parse_ts(step2.created_at) - timedelta(seconds=1))
 
 
@@ -521,20 +522,30 @@ def cmd_check(sc: SearchCandy, args) -> int:
     words back, the expected version, every passage word for word
     against the local file, and the same passages on a second ask.
     WARN = all of that holds, but `ask` would not show it in its first
-    three passages: the note names the flag to use on screen."""
+    three passages: the note names the flag to use on screen.
+
+    With only step 1 loaded (step 2 kept for the call, loaded live),
+    the "before" questions are asked of the current version, which IS
+    step 1, and the "now" questions are SKIP until step 2 is loaded."""
     rows = []
     for lib in selected(args.only):
         graph = graph_name(lib, args.prefix)
         steps = find_steps(sc, lib, graph)
-        if steps[0] is None or steps[1] is None:
+        if steps[0] is None:
             rows.append(("FAIL", lib.name, "(all)", "-", "-",
                          "not loaded: run `load`"))
             continue
+        only_step1 = steps[1] is None
         current = sc.store(graph).current_version
         for q in lib.questions:
             notes: List[str] = []
             version = None
-            if q.when == "before":
+            if only_step1 and q.when == "now":
+                rows.append(("SKIP", lib.name, q.key, "-", "-",
+                             "step 2 not loaded yet (checked after "
+                             "`load --step 2`)"))
+                continue
+            if q.when == "before" and not only_step1:
                 version = sc.versions.as_of(before_update(steps),
                                             store=graph).number
             started = time.perf_counter()
@@ -586,10 +597,13 @@ def cmd_check(sc: SearchCandy, args) -> int:
             f"{seconds:>5} s  {note}")
     failed = sum(1 for r in rows if r[0] == "FAIL")
     warned = sum(1 for r in rows if r[0] == "WARN")
+    skipped = sum(1 for r in rows if r[0] == "SKIP")
+    asked = len(rows) - skipped
     say()
-    say(f"{len(rows) - failed} of {len(rows)} ready"
+    say(f"{asked - failed} of {asked} ready"
         + (f" ({warned} need the flag in their note on screen)"
            if warned else "")
+        + (f"; {skipped} wait for step 2" if skipped else "")
         + ("" if not failed else
            "; swap or drop each FAIL question before the call (DEMO.md)"))
     return 1 if failed else 0
